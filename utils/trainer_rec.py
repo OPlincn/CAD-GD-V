@@ -16,6 +16,7 @@ from utils.image_loader import get_loader
 from utils.image_loader_fsc147 import get_fsc_loader
 from tqdm import tqdm
 import torchvision.transforms.functional as TF
+import torch.nn.functional as F
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 criterion_localization = SetCriterion()
@@ -64,6 +65,14 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
         density_maps = density_maps.to(pred_density_map.device)
         density_maps_gt = density_maps * args.scale
         loss_regression = criterion_counting(pred_density_map, density_maps_gt)
+        # additional supervision on multiscale density maps if available
+        if 'density_pyramid' in outputs:
+            gt = density_maps.unsqueeze(1)
+            loss_ms = 0.0
+            for p in outputs['density_pyramid']:
+                gt_s = F.interpolate(gt, size=p.shape[-2:], mode='bilinear', align_corners=False)
+                loss_ms += criterion_counting(p.squeeze(1), gt_s.squeeze(1) * args.scale)
+            loss_regression = loss_regression + loss_ms / len(outputs['density_pyramid'])
         emb_size = outputs["pred_logits"].shape[2]
         # mae 
         # pred_num 

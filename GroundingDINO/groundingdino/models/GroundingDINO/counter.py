@@ -37,11 +37,15 @@ class DensityRegressor(nn.Module):
                                 nn.ReLU())
         # self.conv4 = nn.Conv2d(counter_dim//2, 1, 1)
         # self.pixel_shuffle = nn.PixelShuffle(upscale_factor=2)
-        
-        self.down2x = nn.MaxPool2d(kernel_size=2, stride=2, ceil_mode=True)
-        self.down4x = nn.MaxPool2d(kernel_size=4, stride=4, ceil_mode=True)
-        self.down8x = nn.MaxPool2d(kernel_size=8, stride=8, ceil_mode=True)
-        
+
+        # heads that predict a density map at each pyramid level
+        self.pyramid_heads = nn.ModuleList(
+            [
+                nn.Sequential(nn.Conv2d(counter_dim, 1, 1), nn.ReLU())
+                for _ in range(4)
+            ]
+        )
+
         self._weight_init_()
         
     def forward(self, features, cnns, img_shape = [1000,1000], hidden_output=False):
@@ -70,12 +74,7 @@ class DensityRegressor(nn.Module):
         x = torch.cat([x, features[0], cnns[0]], dim=1)
         # x = x
         x4 = self.conv3(x)
-        xx4 = x4
-        ## down-scale density feature
-        xx3 = self.down2x(x4)
-        xx2 = self.down4x(x4)
-        xx1 = self.down8x(x4)
-        
+
         ## multi-layer context-aware density feature decode
         
         x = self.up2x(x4)
@@ -83,15 +82,14 @@ class DensityRegressor(nn.Module):
         x = F.interpolate(x, size = img_shape, mode='bilinear')
         
         x = self.conv4(x)
-        
-        # x = F.sigmoid(x)
-        # x = x * 60
-        hidden_mode = 'fpn'
+
+        # predict density map for each feature level
+        pyramid_maps = [
+            head(feat) for head, feat in zip(self.pyramid_heads, [x4, x3, x2, x1])
+        ]
+
         if hidden_output:
-            if hidden_mode == 'down':
-                return x, [xx4,xx3,xx2,xx1]
-            if hidden_mode == 'fpn':
-                return x, [x4,x3,x2,x1]
+            return x, [x4, x3, x2, x1], pyramid_maps
         else:
             return x
 

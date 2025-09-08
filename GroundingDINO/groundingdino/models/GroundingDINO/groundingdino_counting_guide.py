@@ -356,9 +356,28 @@ class GroundingDINOCountingGuide(nn.Module):
                 poss.append(pos_l)
 
         input_query_bbox = input_query_label = attn_mask = dn_meta = None
-        hs, reference, hs_enc, ref_enc, init_box_proposal, img_embs, txt_embs, density, encode_regression_feature, sim_maps = self.transformer( 
-            srcs, masks, input_query_bbox, poss, input_query_label, attn_mask, text_dict, samples.tensors.shape[-2:]
-        ) 
+        (
+            hs,
+            reference,
+            hs_enc,
+            ref_enc,
+            init_box_proposal,
+            img_embs,
+            txt_embs,
+            density,
+            density_pyramid,
+            encode_regression_feature,
+            sim_maps,
+        ) = self.transformer(
+            srcs,
+            masks,
+            input_query_bbox,
+            poss,
+            input_query_label,
+            attn_mask,
+            text_dict,
+            samples.tensors.shape[-2:],
+        )
         
         # deformable-detr-like anchor update
         outputs_coord_list = []
@@ -380,7 +399,16 @@ class GroundingDINOCountingGuide(nn.Module):
         )
 
         token_masks = text_dict["text_attribute_mask"] 
-        out = {"pred_logits": outputs_class[-1], "pred_boxes": outputs_coord_list[-1], "img_embs": hs[-1], "txt_embs": txt_embs, "token_masks": token_masks, 'density': density, 'encode_regression_feature': encode_regression_feature} 
+        out = {
+            "pred_logits": outputs_class[-1],
+            "pred_boxes": outputs_coord_list[-1],
+            "img_embs": hs[-1],
+            "txt_embs": txt_embs,
+            "token_masks": token_masks,
+            "density": density,
+            "density_pyramid": density_pyramid,
+            "encode_regression_feature": encode_regression_feature,
+        }
         out['sim_maps'] = sim_maps
         return out
 
