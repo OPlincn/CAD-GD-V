@@ -65,15 +65,30 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
         density_maps = density_maps.to(pred_density_map.device)
         density_maps_gt = density_maps * args.scale
         loss_regression = criterion_counting(pred_density_map, density_maps_gt)
+        if counter_for_image == 0:
+            print(
+                f"base density: pred {pred_density_map.shape}, gt {density_maps_gt.shape}, gt_sum {density_maps.sum().item():.2f}"
+            )
+            print(f"loss_regression: {loss_regression.item():.4f}")
+
         # additional supervision on multiscale density maps if available
         if 'density_pyramid' in outputs:
             gt = density_maps.unsqueeze(1)
             loss_ms = 0.0
-            for p in outputs['density_pyramid']:
+            for level, p in enumerate(outputs['density_pyramid']):
                 gt_s = F.interpolate(gt, size=p.shape[-2:], mode='bilinear', align_corners=False)
                 scale_ratio = (gt.shape[-2] * gt.shape[-1]) / (p.shape[-2] * p.shape[-1])
-                loss_ms += criterion_counting(p.squeeze(1), gt_s.squeeze(1) * scale_ratio * args.scale)
-            loss_regression = loss_regression + loss_ms / len(outputs['density_pyramid'])
+                loss_ms += criterion_counting(
+                    p.squeeze(1),
+                    gt_s.squeeze(1) * scale_ratio * args.scale,
+                ) / (scale_ratio ** 2)
+                if counter_for_image == 0:
+                    print(f"pyramid level {level}: pred {p.shape}, gt {gt_s.shape}, gt_sum {gt_s.sum().item():.2f}")
+            loss_regression = loss_regression + args.ms_loss_weight * loss_ms / len(outputs['density_pyramid'])
+            if counter_for_image == 0:
+                print(f"loss_ms: {loss_ms.item():.4f}")
+        elif counter_for_image == 0:
+            print("density_pyramid missing from outputs")
         emb_size = outputs["pred_logits"].shape[2]
         # mae 
         # pred_num 
