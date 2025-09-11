@@ -71,7 +71,8 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
             loss_ms = 0.0
             for p in outputs['density_pyramid']:
                 gt_s = F.interpolate(gt, size=p.shape[-2:], mode='bilinear', align_corners=False)
-                loss_ms += criterion_counting(p.squeeze(1), gt_s.squeeze(1) * args.scale)
+                scale_ratio = (gt.shape[-2] * gt.shape[-1]) / (p.shape[-2] * p.shape[-1])
+                loss_ms += criterion_counting(p.squeeze(1), gt_s.squeeze(1) * scale_ratio * args.scale)
             loss_regression = loss_regression + loss_ms / len(outputs['density_pyramid'])
         emb_size = outputs["pred_logits"].shape[2]
         # mae 

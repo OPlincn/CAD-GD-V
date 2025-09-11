@@ -23,7 +23,14 @@ def gaussian_density(shape, points, sigma=4):
     return density
 
 
-def main(image_root, anno_file, split_file, out_dir, sigma=4, scales=(1, 2, 4, 8)):
+def main(
+    image_root,
+    anno_file,
+    split_file,
+    out_dir,
+    sigma=4,
+    scales=(1, 4, 8, 16, 32),
+):
     with open(anno_file, "r") as f:
         annotations = json.load(f)
     with open(split_file, "r") as f:
@@ -45,6 +52,7 @@ def main(image_root, anno_file, split_file, out_dir, sigma=4, scales=(1, 2, 4, 8
         img_out.mkdir(parents=True, exist_ok=True)
         base_name = preprocess_caption(caption).strip(".")
         np.save(img_out / f"{base_name}.npy", density)
+        # optionally store maps downsampled to match feature strides
         for s in scales[1:]:
             ds = cv2.resize(density, (w // s, h // s), interpolation=cv2.INTER_LINEAR)
             if ds.sum() > 0:
@@ -61,7 +69,13 @@ if __name__ == "__main__":
     parser.add_argument("--split-file", default="datasets/rec-8k/splits.json")
     parser.add_argument("--out-dir", default="datasets/rec-8k/density_maps")
     parser.add_argument("--sigma", type=float, default=4.0)
-    parser.add_argument("--scales", nargs="+", type=int, default=[1, 2, 4, 8])
+    parser.add_argument(
+        "--scales",
+        nargs="+",
+        type=int,
+        default=[1, 4, 8, 16, 32],
+        help="downsample factors matching feature strides [4,8,16,32]",
+    )
     args = parser.parse_args()
 
     main(args.image_root, args.anno_file, args.split_file, args.out_dir, args.sigma, tuple(args.scales))
