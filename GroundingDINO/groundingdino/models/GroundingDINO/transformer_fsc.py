@@ -403,7 +403,9 @@ class Transformer(nn.Module):
             cnn.append(memory_flatten_.permute(0,3,1,2))
             _cur += H_ * W_
         ## TODO: Density Regression 
-        density, density_hidden_features = self.regressor(cas_feature, cnn, img_shape=img_shape, hidden_output=True)
+        density, density_hidden_features, density_pyramid = self.regressor(
+            cas_feature, cnn, img_shape=img_shape, hidden_output=True
+        )
         
         # pred_num_reg = torch.sum(density, dim=[1,2,3]) / 60
         if self.density_warmup:
@@ -599,7 +601,19 @@ class Transformer(nn.Module):
         # ref_enc: (n_enc+1, bs, nq, query_dim) or (1, bs, nq, query_dim) or (n_enc, bs, nq, d_model) or None
         #########################################################
 
-        return hs, references, hs_enc, ref_enc, init_box_proposal, img_embs, txt_embs, density, output_memory_regression_dict, sim_maps
+        return (
+            hs,
+            references,
+            hs_enc,
+            ref_enc,
+            init_box_proposal,
+            img_embs,
+            txt_embs,
+            density,
+            density_pyramid,
+            output_memory_regression_dict,
+            sim_maps,
+        )
 
     
 class TransformerEncoder(nn.Module):

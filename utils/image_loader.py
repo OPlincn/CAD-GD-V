@@ -5,27 +5,46 @@ from groundingdino.util.base_api import preprocess_caption
 from groundingdino.util.img_read import load_image
 from utils.processor import DataProcessor
 import io
+
+
 def collate_fn(batch):
-    
-    images, labels, shapes, img_ids, density_maps = zip(*batch)
+    """Custom collate_fn that also pads and stacks density maps.
 
-    # Get the max height and width among the images
-    max_height = max([img.shape[1] for img in images])
-    max_width = max([img.shape[2] for img in images])
+    Each item in ``batch`` contains the tensorized image and a tensor of
+    density maps (one per caption).  Images in a batch may have different
+    spatial sizes due to random resizing, so we pad both the images and the
+    corresponding density maps to the maximum height and width before
+    stacking. Density maps are then concatenated along the caption dimension
+    so that the returned tensor has a shape of
+    ``(sum_i num_caps_i, H_max, W_max)`` aligning with the flattened caption
+    list used during training.
+    """
 
-    # Create tensors filled with zeros to store padded images
+    images, labels, shapes, img_caps, density_maps = zip(*batch)
+
+    # Determine max height and width to pad images and density maps
+    max_height = max(img.shape[1] for img in images)
+    max_width = max(img.shape[2] for img in images)
+
     padded_images = torch.zeros(len(images), 3, max_height, max_width)
-    # Pad each image and add to the padded_images tensor
+    padded_densities = []
     for i, img in enumerate(images):
-        padded_images[i, :, :img.shape[1], :img.shape[2]] = img
+        h, w = img.shape[1], img.shape[2]
+        padded_images[i, :, :h, :w] = img
 
-    # tuple to list
+        dens = density_maps[i]
+        pad_dens = torch.zeros(dens.shape[0], max_height, max_width)
+        pad_dens[:, :h, :w] = dens
+        padded_densities.append(pad_dens)
+
+    # Flatten density maps from all images so they align with flattened captions
+    density_maps = torch.cat(padded_densities, dim=0)
+
     labels = list(labels)
     shapes = list(shapes)
-    img_ids = list(img_ids)
-    # density_maps = list(density_maps)
+    img_caps = list(img_caps)
 
-    return padded_images, labels, shapes, img_ids, density_maps[0] # tensor (bs,3,h,w), list (), list ((w,h)), list ()
+    return padded_images, labels, shapes, img_caps, density_maps
 
 def get_loader(processor: DataProcessor, split, batch_size):
     

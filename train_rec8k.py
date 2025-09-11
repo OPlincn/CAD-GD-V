@@ -26,6 +26,7 @@ parser.add_argument("--un_epochs", default=15, type=int, help="epoches")
 parser.add_argument("--batch", default=1, type=int, help="batch size")
 parser.add_argument("--seed", default=314, type=int, help="batch size")
 parser.add_argument("--scale", default=1000, type=int, help="batch size")
+parser.add_argument("--ms_loss_weight", default=0.25, type=float, help="weight for multiscale density losses")
 
 parser.add_argument("--lr", default=1e-5, type=float, help="init lr")
 parser.add_argument("--weight_decay", default=0.0001, type=float, help="weight decay")
