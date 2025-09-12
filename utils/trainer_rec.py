@@ -65,6 +65,7 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
         density_maps = density_maps.to(pred_density_map.device)
         density_maps_gt = density_maps * args.scale
         loss_regression = criterion_counting(pred_density_map, density_maps_gt)
+        #TODO oplin add
         if counter_for_image == 0:
             print(
                 f"base density: pred {pred_density_map.shape}, gt {density_maps_gt.shape}, gt_sum {density_maps.sum().item():.2f}"
@@ -72,24 +73,32 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
             print(f"loss_regression: {loss_regression.item():.4f}")
 
         # additional supervision on multiscale density maps if available
+        ms_loss_weight = 0.8
         if 'density_pyramid' in outputs:
             gt = density_maps.unsqueeze(1)
+            orig_sum = gt.sum(dim=[2, 3], keepdim=True)  # preserve counts per sample
             loss_ms = 0.0
             for level, p in enumerate(outputs['density_pyramid']):
                 gt_s = F.interpolate(gt, size=p.shape[-2:], mode='bilinear', align_corners=False)
-                scale_ratio = (gt.shape[-2] * gt.shape[-1]) / (p.shape[-2] * p.shape[-1])
-                loss_ms += criterion_counting(
-                    p.squeeze(1),
-                    gt_s.squeeze(1) * scale_ratio * args.scale,
-                ) / (scale_ratio ** 2)
-                if counter_for_image == 0:
-                    print(f"pyramid level {level}: pred {p.shape}, gt {gt_s.shape}, gt_sum {gt_s.sum().item():.2f}")
-            loss_regression = loss_regression + args.ms_loss_weight * loss_ms / len(outputs['density_pyramid'])
-            if counter_for_image == 0:
+                # Renormalize so the downsampled map still integrates to the
+                # original count. Bilinear interpolation alone can otherwise
+                # change the total mass dramatically.
+                gt_s_sum = gt_s.sum(dim=[2, 3], keepdim=True).clamp(min=1e-6)
+                gt_s = gt_s * (orig_sum / gt_s_sum)
+                loss_ms += criterion_counting(p.squeeze(1), gt_s.squeeze(1) * 1.0)
+                if counter_for_image % 50 == 0:
+                    gt_sum_rescaled = gt_s.sum().item()
+                    pred_sum = p.sum().item() / args.scale
+                    print(
+                        f"pyramid level {level}: pred {p.shape}, gt {gt_s.shape}, gt_sum {gt_sum_rescaled:.2f}, pred_sum {pred_sum:.2f}"
+                    )
+            loss_regression = loss_regression + ms_loss_weight * loss_ms / len(outputs['density_pyramid'])
+            if counter_for_image % 50 == 0:
                 print(f"loss_ms: {loss_ms.item():.4f}")
         elif counter_for_image == 0:
             print("density_pyramid missing from outputs")
-        emb_size = outputs["pred_logits"].shape[2]
+        #
+        
         # mae 
         # pred_num 
         targets = prepare_targets(model, anno_b, captions, shapes, emb_size)
