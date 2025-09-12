@@ -17,10 +17,30 @@ from utils.image_loader_fsc147 import get_fsc_loader
 from tqdm import tqdm
 import torchvision.transforms.functional as TF
 import torch.nn.functional as F
+import torch.nn as nn
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 criterion_localization = SetCriterion()
 criterion_counting = L2Loss()
+
+# 用于监督生成的密度点图
+def get_bm_loss(gt_den, pred_den, gt_cnt):
+        dm_mae = nn.L1Loss().cuda()
+        dm_tv_loss = nn.L1Loss(reduction='none').cuda()
+        pred_cnt = torch.sum(pred_den.flatten(2), dim=-1)
+        count_loss = dm_mae(pred_cnt.squeeze(), gt_cnt.squeeze())
+        # Comput
+        pred_normed = pred_den / (pred_cnt.unsqueeze(1).unsqueeze(2) + 1e-6)# D'/c'
+        gt_normed = gt_den / (gt_cnt + 1e-6)# D_gt/c_gt
+        # print("******pred_normed,gt_normed",pred_normed.shape, gt_normed.shape)
+        tv_loss = (dm_tv_loss(pred_normed, gt_normed).sum(dim=[1,2,3]) * gt_cnt.squeeze()).mean(0)
+        #tv_loss = (dm_tv_loss(pred_normed, gt_normed).sum(dim=[1,2,3]) * torch.maximum(gt_cnt.squeeze(), pred_cnt.squeeze())).mean(0)
+        # print ("tv_loss**********",pred_normed.shape,gt_normed.shape, tv_loss.shape)
+        # compute OT loss
+        loss = count_loss + 0.01 * tv_loss
+        # print ("loss**********",loss.shape)
+        # return loss
+        return loss
 
 def train(model, loaders, optimizer, scheduler, annotations, args):
     print(f"Training on train set data")
@@ -64,34 +84,51 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
         pred_density_map = outputs['density'].squeeze(1)
         density_maps = density_maps.to(pred_density_map.device)
         density_maps_gt = density_maps * args.scale
-        loss_regression = criterion_counting(pred_density_map, density_maps_gt)
-        #TODO oplin add
+        #TODO 这行代码是原先监督生成的最终高斯密度图的，但是现在要更改为监督密度点图的生成
+        loss_regression = criterion_counting(pred_density_map, density_maps_gt) 
+        """以下是从别的模型中，摘抄的监督密度点图生成代码，我们也要用类似的方式监督生成的1/8 scale密度点图
+        for j, dm in enumerate(out_dm):
+            B, C, H, W = dm.shape              
+            pos = gt_discrete.reshape([B, C, H, int(H1 / H), W, int(W1 / W)])                
+            pos = torch.sum(pos, dim=3)
+            pos = torch.sum(pos, dim=-1)
+            assert torch.sum(gt_discrete)==torch.sum(pos)
+            #     assert pos.shape==dm.shape
+            loss_dm =loss_dm + get_bm_loss(pos, dm, gd_count_tensor) 
+        """
+        
+        #TODO oplin add additional supervision on multiscale density maps [1/8, 1/16] scales if available
         if counter_for_image == 0:
             print(
                 f"base density: pred {pred_density_map.shape}, gt {density_maps_gt.shape}, gt_sum {density_maps.sum().item():.2f}"
             )
             print(f"loss_regression: {loss_regression.item():.4f}")
 
-        # additional supervision on multiscale density maps if available
-        ms_loss_weight = 0.8
+        ms_loss_weight = 0.1
         if 'density_pyramid' in outputs:
             gt = density_maps.unsqueeze(1)
             orig_sum = gt.sum(dim=[2, 3], keepdim=True)  # preserve counts per sample
             loss_ms = 0.0
             for level, p in enumerate(outputs['density_pyramid']):
                 gt_s = F.interpolate(gt, size=p.shape[-2:], mode='bilinear', align_corners=False)
-                # Renormalize so the downsampled map still integrates to the
-                # original count. Bilinear interpolation alone can otherwise
-                # change the total mass dramatically.
-                gt_s_sum = gt_s.sum(dim=[2, 3], keepdim=True).clamp(min=1e-6)
+                gt_s_sum = gt_s.sum(dim=[2,3], keepdim=True).clamp(min=1e-6)
                 gt_s = gt_s * (orig_sum / gt_s_sum)
-                loss_ms += criterion_counting(p.squeeze(1), gt_s.squeeze(1) * 1.0)
+                gt_s = gt_s * args.scale          # <-- 与主密度图保持同一放缩
+                level_dloss = criterion_counting(p.squeeze(1), gt_s.squeeze(1))
                 if counter_for_image % 50 == 0:
-                    gt_sum_rescaled = gt_s.sum().item()
-                    pred_sum = p.sum().item() / args.scale
-                    print(
-                        f"pyramid level {level}: pred {p.shape}, gt {gt_s.shape}, gt_sum {gt_sum_rescaled:.2f}, pred_sum {pred_sum:.2f}"
+                    print(rf"level: {level}, dloss: {level_dloss}")
+                loss_ms += level_dloss
+                if counter_for_image % 50 == 0:
+                    gt_sum_per_sample = (
+                        gt_s.sum(dim=[2, 3]).squeeze(1) / args.scale
                     )
+                    pred_sum_per_sample = (
+                        p.sum(dim=[2, 3]).squeeze(1) / args.scale
+                    )
+                    for i, (g, pred) in enumerate(zip(gt_sum_per_sample, pred_sum_per_sample)):
+                        print(
+                            f"pyramid level {level} sample {i}: gt_sum {g.item():.2f}, pred_sum {pred.item():.2f}"
+                        )
             loss_regression = loss_regression + ms_loss_weight * loss_ms / len(outputs['density_pyramid'])
             if counter_for_image % 50 == 0:
                 print(f"loss_ms: {loss_ms.item():.4f}")
@@ -99,6 +136,7 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
             print("density_pyramid missing from outputs")
         #
         
+        emb_size = outputs["pred_logits"].shape[2]
         # mae 
         # pred_num 
         targets = prepare_targets(model, anno_b, captions, shapes, emb_size)
