@@ -66,7 +66,7 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
     
     total_num = 0
     my_count_brother = 0
-    for images, captions, shapes, img_caps, density_maps in tqdm(loader): # tensor, list of list [caption] for each image in the batch, list, list of list [(img, cap)] for each img in the batch
+    for images, captions, shapes, img_caps, density_maps, density_points in tqdm(loader): # tensor, list of list [caption] for each image in the batch, list, list of list [(img, cap)] for each img in the batch
 
         mask_bi = [i for i, img_cap_list in enumerate(img_caps) for _ in img_cap_list] # index for each img,cap pair in the batch
         anno_b = [annotations[img_cap] for img_cap_list in img_caps for img_cap in img_cap_list] 
@@ -81,10 +81,11 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
 
         outputs = model(images, captions=captions)
         # density map and loss
-        pred_density_map = outputs['density'].squeeze(1)
-        density_maps = density_maps.to(pred_density_map.device)
+        pred_density_map = outputs['density'].squeeze(1) # now is B x 1 x H x W, but when we switch its supervisory signal to density point GT, it scale will be B x 1 x H/8 x W/8
+        density_points = density_points.to(pred_density_map.device) # B x 1 x H x W, density point map GT
+        density_maps = density_maps.to(pred_density_map.device) # B x 1 x H x W, Gaussian density map GT
         density_maps_gt = density_maps * args.scale
-        #TODO 这行代码是原先监督生成的最终高斯密度图的，但是现在要更改为监督密度点图的生成
+        #TODO 这行代码是原先监督生成的最终高斯密度图的，但是现在要更改为监督密度点图的生成，那么就需要使用density_points作为真值，而且不能简单使用L2loss来计算了
         loss_regression = criterion_counting(pred_density_map, density_maps_gt) 
         """以下是从别的模型中，摘抄的监督密度点图生成代码，我们也要用类似的方式监督生成的1/8 scale密度点图
         for j, dm in enumerate(out_dm):
@@ -96,20 +97,28 @@ def train(model, loaders, optimizer, scheduler, annotations, args):
             #     assert pos.shape==dm.shape
             loss_dm =loss_dm + get_bm_loss(pos, dm, gd_count_tensor) 
         """
+        """
+        Question: Because the base model I used is groundingdino, after processing the input images, the final size input into the model may not be divisible. 
+        For example, the final input model size is [6, 1, 750, 1333], while the 1/8 scale image feature used to generate the predicted density point map only has [6, 1, 94, 167]. 
+        Therefore, the predicted density point map obtained should also be [6, 1, 94, 167]. One problem is that [6, 1, 94, 167] and [6, 1, 750, 1333] are not 8 times corresponding. 
+        It seems that I cannot directly reshape the GT point map to [6, 1, 94, 167].
+        """
         
-        #TODO oplin add additional supervision on multiscale density maps [1/8, 1/16] scales if available
+        #TODO oplin add additional supervision on multiscale Gaussian density maps [1/8, 1/16] scales if available
         if counter_for_image == 0:
             print(
                 f"base density: pred {pred_density_map.shape}, gt {density_maps_gt.shape}, gt_sum {density_maps.sum().item():.2f}"
+                # f"base density: pred {pred_density_map.shape}, gt {gt_s.shape}, gt_sum {density_points.sum().item():.2f}"
             )
             print(f"loss_regression: {loss_regression.item():.4f}")
 
-        ms_loss_weight = 0.1
+        ms_loss_weight = 1.0
         if 'density_pyramid' in outputs:
             gt = density_maps.unsqueeze(1)
             orig_sum = gt.sum(dim=[2, 3], keepdim=True)  # preserve counts per sample
             loss_ms = 0.0
             for level, p in enumerate(outputs['density_pyramid']):
+                # print(rf"p.shape[-2:] shape: {p.shape[-2:]}")
                 gt_s = F.interpolate(gt, size=p.shape[-2:], mode='bilinear', align_corners=False)
                 gt_s_sum = gt_s.sum(dim=[2,3], keepdim=True).clamp(min=1e-6)
                 gt_s = gt_s * (orig_sum / gt_s_sum)
@@ -239,7 +248,7 @@ def eval_fn(split, model, loaders, annotations, args):
 
     total_num = 0
 
-    for images, captions, shapes, img_caps, density_maps in loader: # tensor, list, list, list
+    for images, captions, shapes, img_caps, density_maps, density_points in loader: # tensor, list, list, list
 
         anno_b = [annotations[img_cap] for img_cap_list in img_caps for img_cap in img_cap_list] 
         img_caps = [img_cap for img_cap_list in img_caps for img_cap in img_cap_list]
