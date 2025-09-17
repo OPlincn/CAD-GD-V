@@ -80,7 +80,22 @@ class Normalize(object):
         return image, target
 
 
-def load_image(image_path: str, density_dir: str, density_names: list) -> Tuple[np.array, torch.Tensor]:
+def load_image(image_path: str, density_dir: str, density_names: list) -> Tuple[np.array, torch.Tensor, torch.Tensor]:
+    """Load an image along with Gaussian density maps and discrete point maps.
+
+    Args:
+        image_path: path to the image file.
+        density_dir: directory containing density map ``.npy`` files.
+        density_names: list of base names (processed captions) for which
+            corresponding ``<name>.npy`` (Gaussian) and ``<name>_pt.npy``
+            (point) files exist.
+
+    Returns:
+        Tuple containing the original image array, transformed image tensor,
+        transformed Gaussian density maps tensor, and transformed point maps
+        tensor.  The transformation (resize + normalization) is applied
+        consistently across the image and all density maps.
+    """
     transform = T.Compose(
         [
             RandomResize([800], max_size=1333),
@@ -89,20 +104,27 @@ def load_image(image_path: str, density_dir: str, density_names: list) -> Tuple[
         ]
     )
     ## TODO: ceph 读取图像和density map
-    img_url = image_path
     image_source = Image.open(image_path).convert("RGB")
     image_source = ImageOps.exif_transpose(image_source)
     # image_source = Image.open(image_path).convert("RGB")
     density_maps = []
+    point_maps = []
     for name in density_names:
-        density_path = os.path.join(density_dir, name.strip('.')+'.npy')
-        density_source = np.load(density_path)
-        density_maps.append(density_source)
+        base = name.strip('.')
+        density_path = os.path.join(density_dir, base + '.npy')
+        point_path = os.path.join(density_dir, base + '_pt.npy')
+        density_maps.append(np.load(density_path))
+        point_maps.append(np.load(point_path))
     image = np.asarray(image_source)
-    # cv2.imwrite('image.jpg', image[:,:,[2,1,0]])
-    # cv2.imwrite('density.jpg', max_min(density_maps[1]) * 255)
-    image_transformed, density_transformed = transform(image_source, density_maps)
-    return image, image_transformed, density_transformed
+
+    # Apply the same transform to the image and all density maps
+    image_transformed, dens_pt_transformed = transform(image_source, density_maps + point_maps)
+
+    n = len(density_maps)
+    density_transformed = dens_pt_transformed[:n]
+    point_transformed = dens_pt_transformed[n:]
+
+    return image, image_transformed, density_transformed, point_transformed
 
 def max_min(img):
     return (img - np.min(img)) / (np.max(img) - np.min(img))
