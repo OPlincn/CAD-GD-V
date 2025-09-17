@@ -36,26 +36,26 @@ class DensityRegressor(nn.Module):
         )
         
         # Upsample branch (concat上一层的密度图)
-        # self.up2x = nn.Sequential(
-        #     nn.Conv2d(counter_dim + 1, counter_dim//2, 3, padding=1),  # +1 for m4
-        #     nn.ReLU(),
-        #     nn.Conv2d(counter_dim//2, counter_dim//4, 1),
-        #     nn.ReLU(),
-        # )
         self.up2x = nn.Sequential(
             nn.Conv2d(counter_dim + 1, counter_dim//2, 3, padding=1),  # +1 for m4
             nn.ReLU(),
             nn.Conv2d(counter_dim//2, counter_dim//4, 1),
             nn.ReLU(),
-            nn.Conv2d(counter_dim//4, 1, 1),
-            nn.ReLU(),
         )
+        # self.up2x = nn.Sequential(
+        #     nn.Conv2d(counter_dim + 1, counter_dim//2, 3, padding=1),  # +1 for m4
+        #     nn.ReLU(),
+        #     nn.Conv2d(counter_dim//2, counter_dim//4, 1),
+        #     nn.ReLU(),
+        #     nn.Conv2d(counter_dim//4, 1, 1),
+        #     nn.ReLU(),
+        # )
         
         # Final density output
-        # self.conv4 = nn.Sequential(
-        #     nn.Conv2d(counter_dim//4, 1, 1),
-        #     nn.ReLU()  # 保持ReLU确保最终输出非负
-        # )
+        self.conv4 = nn.Sequential(
+            nn.Conv2d(counter_dim//4, 1, 1),
+            nn.ReLU()  # 保持ReLU确保最终输出非负
+        )
         
         # Pyramid heads - 使用Softplus避免梯度截断
         self.pyramid_heads = nn.ModuleList([
@@ -113,14 +113,14 @@ class DensityRegressor(nn.Module):
         x = torch.cat([x4, m4], dim=1)  # 修复：concat m4到最终层
         x = self.up2x(x) # 生成最终的密度点图(1/8 scale)
         # Stage 4: 1/8 -> 1 (使用m4)
-        # x = F.interpolate(x, size=img_shape, mode='bilinear', align_corners=False)
-        # x = self.conv4(x)  # 最终密度图
+        x = F.interpolate(x, size=img_shape, mode='bilinear', align_corners=False)
+        x = self.conv4(x)  # 最终密度图
         
         # 返回pyramid maps用于多尺度监督
-        pyramid_maps = [m4, m3]  # 1/8 and 1/16
-        
+        pyramid_maps = [m4, m3]  # 1/8 and 1/16 pred multiscales gaussian density map
+        # print(rf"x4 shape: {x4.shape}, x3 shape: {x3.shape}, x2 shape: {x2.shape}, x1 shape: {x1.shape}")
         if hidden_output:
-            # x is 1/8 density point map, [x4, x3, x2, x1] scale: [1/8, 1/16, 1/32, 1/64]
+            # x now is 1/1 pred gaussian density map, but we want remove F.interpolate and use it as 1/8 pred density point map, [x4, x3, x2, x1] scale: [1/8, 1/16, 1/32, 1/64]
             return x, [x4, x3, x2, x1], pyramid_maps
         else:
             return x
