@@ -3,32 +3,24 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from groundingdino.util.base_api import preprocess_caption
 from groundingdino.util.img_read import load_image
+# from groundingdino.util.img_read_v2 import load_image_v2
 from utils.processor import DataProcessor
 import io
-
-
 def collate_fn(batch):
-    """Custom collate_fn that also pads and stacks density maps.
+    
+    images, labels, shapes, img_caps, density_maps, density_points = zip(*batch)
 
-    Each item in ``batch`` contains the tensorized image and a tensor of
-    density maps (one per caption).  Images in a batch may have different
-    spatial sizes due to random resizing, so we pad both the images and the
-    corresponding density maps to the maximum height and width before
-    stacking. Density maps are then concatenated along the caption dimension
-    so that the returned tensor has a shape of
-    ``(sum_i num_caps_i, H_max, W_max)`` aligning with the flattened caption
-    list used during training.
-    """
+    # Get the max height and width among the images
+    max_height = max([img.shape[1] for img in images])
+    max_width = max([img.shape[2] for img in images])
 
-    images, labels, shapes, img_caps, density_maps = zip(*batch)
-
-    # Determine max height and width to pad images and density maps
-    max_height = max(img.shape[1] for img in images)
-    max_width = max(img.shape[2] for img in images)
-
+    # Create tensors filled with zeros to store padded images
     padded_images = torch.zeros(len(images), 3, max_height, max_width)
+    # Pad each image and add to the padded_images tensor
     padded_densities = []
+    padded_points = []
     for i, img in enumerate(images):
+        # padded_images[i, :, :img.shape[1], :img.shape[2]] = img
         h, w = img.shape[1], img.shape[2]
         padded_images[i, :, :h, :w] = img
 
@@ -36,15 +28,22 @@ def collate_fn(batch):
         pad_dens = torch.zeros(dens.shape[0], max_height, max_width)
         pad_dens[:, :h, :w] = dens
         padded_densities.append(pad_dens)
-
+        
+        pts = density_points[i]
+        pad_pts = torch.zeros(pts.shape[0], max_height, max_width)
+        pad_pts[:, :h, :w] = pts
+        padded_points.append(pad_pts)
     # Flatten density maps from all images so they align with flattened captions
     density_maps = torch.cat(padded_densities, dim=0)
-
+    density_points = torch.cat(padded_points, dim=0)
+    # tuple to list
     labels = list(labels)
     shapes = list(shapes)
     img_caps = list(img_caps)
+    # density_maps = list(density_maps)
 
-    return padded_images, labels, shapes, img_caps, density_maps
+    # return padded_images, labels, shapes, img_ids, density_maps[0] # tensor (bs,3,h,w), list (), list ((w,h)), list ()
+    return padded_images, labels, shapes, img_caps, density_maps, density_points
 
 def get_loader(processor: DataProcessor, split, batch_size):
     
@@ -64,7 +63,7 @@ class Rec8KDataset(Dataset):
         self.split = split
 
         split_set_tuples = processor.get_img_ids_for_split(split) # list of (img_id, cap)
-        self.density_dir = './datasets/rec-8k/density_maps'
+        self.density_dir = '/dongli/oplin_lab/datasets/REC_8k/multiDensity_maps'
         split_dict = {}
         for img_id, cap in split_set_tuples:
             if img_id in split_dict:
@@ -97,10 +96,11 @@ class Rec8KDataset(Dataset):
 
         label = self.labels[idx] # list of caps for same image
 
-        image_source, image, density_maps = load_image(img_file, density_dir, label)
+        # image_source, image, density_maps = load_image(img_file, density_dir, label)
+        image_source, image, density_maps, density_points = load_image(img_file, density_dir, label)
         h, w, _ = image_source.shape
         
         img_cap_tuple = self.img_cap_tuples[idx]  # list of tuples (img_id, cap) for same image
 
-        return image, label, (h, w), img_cap_tuple, density_maps
+        return image, label, (h, w), img_cap_tuple, density_maps, density_points
 
